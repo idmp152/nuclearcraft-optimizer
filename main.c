@@ -1,0 +1,330 @@
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+#include "math.h"
+ 
+#define MAX_GRID_SIZE (26 * 26 * 26)
+
+enum BlockType {
+    BLK_CASING = 0,
+    BLK_AIR,
+
+    BLK_CELL,
+    BLK_GRAPHITE,
+    BLK_SPEED,
+
+    BLK_COOLER_STD,
+    BLK_COOLER_WATER,
+    BLK_COOLER_CRYOTHEUM,
+    BLK_COOLER_REDSTONE,
+    BLK_COOLER_ENDER,
+    BLK_COOLER_GLOWSTONE,
+    BLK_COOLER_COOLANT,
+    BLK_COOLER_HELIUM,
+    BLK_COUNT
+};
+
+typedef struct {
+    int width;
+    int height;
+    int depth;
+    int cooler_heat;
+    int cell_rf;
+    int cell_heat;
+    int cell_total;
+    int fuel_heat;
+    int fuel_rf;
+    int graphite_total;
+    int active_graphite_total;
+    int speed_block_total;
+} ReactorState; // "Just make a fat struct, your life is too short to avoid it.
+                // It's going to get taken over by robots in 5 years. 
+                // Did you see that crazy video of the 1600$ wheeled Chinese robot?"
+                // - JBlow
+
+static uint8_t grid[MAX_GRID_SIZE];
+
+static inline int idx3d(int x, int y, int z, int width, int height) {
+    return x + y*width + z*width*height;
+}
+
+static inline uint8_t is_adjacent(const uint8_t* grid, int width, int height, int x, int y, int z, uint8_t block_type) {
+    return (grid[idx3d(x + 1, y, z, width, height)] == block_type) +
+           (grid[idx3d(x, y + 1, z, width, height)] == block_type) +
+           (grid[idx3d(x, y, z + 1, width, height)] == block_type) +
+           (grid[idx3d(x - 1, y, z, width, height)] == block_type) +
+           (grid[idx3d(x, y - 1, z, width, height)] == block_type) +
+           (grid[idx3d(x, y, z - 1, width, height)] == block_type);
+}
+
+static inline uint8_t is_cell_adjacent_through_graphite(const uint8_t* grid, int width, int height, int x, int y, int z) {
+    static const int dx[6] = {1, -1, 0, 0, 0, 0};
+    static const int dy[6] = {0, 0, 1, -1, 0, 0};
+    static const int dz[6] = {0, 0, 0, 0, 1, -1}; 
+
+    int n = 0;
+    for (int i = 0; i < 6; ++i) {
+        int cx = x;
+        int cy = y;
+        int cz = z;
+        do {
+            cx += dx[i];
+            cy += dy[i];
+            cz += dz[i];
+        } while (grid[idx3d(cx, cy, cz, width, height)] == BLK_GRAPHITE);
+
+        if (grid[idx3d(cx, cy, cz, width, height)] == BLK_CELL) {
+            ++n;
+        }
+    }
+    
+    return n;
+}
+
+void eval_cell(const uint8_t* grid, int x, int y, int z, ReactorState* state) {
+    uint8_t cell_type = grid[idx3d(x, y, z, state->width, state->height)];
+    
+    switch (cell_type)
+    {
+        case BLK_CASING:
+        case BLK_AIR:
+            break;
+        case BLK_COOLER_STD:
+            state->cooler_heat -= 30;
+            if (is_adjacent(grid, state->width, state->height, x, y, z, BLK_COOLER_STD)) {
+                state->cooler_heat -= 30;
+            }
+            break;
+        case BLK_COOLER_WATER:
+            state->cooler_heat -= 30;
+            if (is_adjacent(grid, state->width, state->height, x, y, z, BLK_CASING)) {
+                state->cooler_heat -= 30;
+            }
+            break;
+        case BLK_COOLER_CRYOTHEUM:
+            state->cooler_heat -= 80;
+            if (!is_adjacent(grid, state->width, state->height, x, y, z, BLK_COOLER_CRYOTHEUM)) {
+                state->cooler_heat -= 80;
+            }
+            break;
+        case BLK_COOLER_REDSTONE:
+            state->cooler_heat -= 80;
+            if (is_adjacent(grid, state->width, state->height, x, y, z, BLK_CELL)) {
+                state->cooler_heat -= 80;
+            }
+            break;
+        case BLK_COOLER_ENDER:
+            state->cooler_heat -= 80;
+            if (is_adjacent(grid, state->width, state->height, x, y, z, BLK_GRAPHITE)) {
+                state->cooler_heat -= 80;
+            }
+            break;
+        case BLK_COOLER_GLOWSTONE:
+            state->cooler_heat -= 80;
+            if (is_adjacent(grid, state->width, state->height, x, y, z, BLK_GRAPHITE) == 6) {
+                state->cooler_heat -= 3*80;
+            }
+            break;
+        case BLK_COOLER_COOLANT:
+            state->cooler_heat -= 80;
+            if (is_adjacent(grid, state->width, state->height, x, y, z, BLK_COOLER_WATER)) {
+                state->cooler_heat -= 80;
+            }
+            break;
+        case BLK_COOLER_HELIUM:
+            state->cooler_heat -= 125;
+            break;
+        case BLK_CELL: {
+            int n = is_cell_adjacent_through_graphite(grid, state->width, state->height, x, y, z);
+            state->cell_heat += (n+1)*(n+2)/2 * state->fuel_heat;
+            state->cell_rf += (n+1) * state->fuel_rf;
+            ++state->cell_total;
+            break;
+        }
+        case BLK_GRAPHITE:
+            ++state->graphite_total;
+            if (is_adjacent(grid, state->width, state->height, x, y, z, BLK_CELL)) {
+                ++state->active_graphite_total;
+            }
+            break;
+        case BLK_SPEED:
+            ++state->speed_block_total;
+            break;
+        default:
+            printf("Unknown cell type in array! x: %d, y: %d, z: %d, type: %d", x, y, z, cell_type);
+            break;
+    }
+}
+
+void reset_accumulators(ReactorState* state) {
+    state->cooler_heat = 0;
+    state->cell_rf = 0;
+    state->cell_heat = 0;
+    state->cell_total = 0;
+    state->graphite_total = 0;
+    state->active_graphite_total = 0;
+    state->speed_block_total = 0;
+}
+
+void eval_full(const uint8_t* grid, ReactorState* state, int* total_rf, int* total_heat) {
+    reset_accumulators(state);
+    for (int i = 1; i < state->width - 1; ++i) {
+        for (int j = 1; j < state->height - 1; ++j) {
+            for (int k = 1; k < state->depth - 1; ++k) {
+                eval_cell(grid, i, j, k, state);
+            }
+        }
+    }
+    *total_rf = state->cell_rf + state->active_graphite_total*state->cell_total*state->fuel_rf/10;
+    *total_heat = state->cell_heat + state->cooler_heat + state->graphite_total*state->cell_total*state->fuel_rf/5;
+}
+
+void init_grid(uint8_t* grid, int inner_w, int inner_h, int inner_d, ReactorState* state) {
+    state->width  = inner_w + 2;
+    state->height = inner_h + 2;
+    state->depth  = inner_d + 2;
+
+    int total_cells = state->width * state->height * state->depth;
+    memset(grid, BLK_CASING, total_cells);
+
+    for (int z = 1; z <= inner_d; ++z) {
+        for (int y = 1; y <= inner_h; ++y) {
+            for (int x = 1; x <= inner_w; ++x) {
+                grid[idx3d(x, y, z, state->width, state->height)] = BLK_AIR;
+            }
+        }
+    }
+}
+
+static inline double score_efficiency(int total_rf, int total_heat, ReactorState* state) {
+    if (total_heat > 0) {
+        return -1000 - total_heat*10;
+    }
+
+    if (state->cell_total == 0) {
+        return 0;
+    }
+
+    return (double)total_rf / (double)state->cell_total + 0.01*total_rf;
+}
+
+static uint32_t rng_state = 123456789u;
+static inline uint32_t xorshift_rand() {
+    uint32_t x = rng_state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    return rng_state = x;
+}
+
+static inline double rand_double(void) {
+    return (double)xorshift_rand() / (double)UINT32_MAX;
+}
+
+static const uint8_t ALLOWED_BLOCKS[] = {
+    BLK_AIR,
+    BLK_CELL,
+    BLK_GRAPHITE,
+    BLK_COOLER_STD,
+    BLK_COOLER_WATER,
+    BLK_COOLER_CRYOTHEUM,
+    BLK_COOLER_REDSTONE,
+    BLK_COOLER_ENDER,
+    BLK_COOLER_GLOWSTONE,
+    BLK_COOLER_COOLANT,
+    BLK_COOLER_HELIUM
+}; // TODO(idmp152): Can possibly be changed by user
+#define ALLOWED_COUNT (sizeof(ALLOWED_BLOCKS) / sizeof(ALLOWED_BLOCKS[0]))
+
+void optimize(uint8_t* grid, ReactorState* state, double T_start, double T_end, int iterations) {
+    double T = T_start;
+    double alpha = pow(T_end / T_start, 1./iterations);
+
+    double score = 0.;
+    int total_cells = state->width * state->height * state->depth;
+    uint8_t grid_copy[MAX_GRID_SIZE];
+    uint8_t best_grid[MAX_GRID_SIZE];
+    memcpy(best_grid, grid, total_cells);
+    double best_score = -99999999999999;
+    for(int i = 0; i < iterations; ++i) {
+        memcpy(grid_copy, grid, total_cells); // TODO(idmp152): awful, copying
+        int replacements  = 0;
+        do {
+            ++replacements;
+            grid_copy[idx3d(1 + xorshift_rand() % (state->width - 2),
+                1 + xorshift_rand() % (state->height - 2),
+                1 + xorshift_rand() % (state->depth - 2), state->width, state->height)] = ALLOWED_BLOCKS[xorshift_rand() % ALLOWED_COUNT];
+        } while (rand_double() < 0.5 * (T / T_start) && replacements < 5); // TODO(idmp152): magic, 0.5 coeff can be varied for efficiency, as well as max replacements
+        int rf = 0, heat = 0;
+        eval_full(grid_copy, state, &rf, &heat); // TODO(idmp152): bad, should be evaluating replacements, not full grid
+        double new_score = score_efficiency(rf, heat, state);
+        if (new_score > score || rand_double() < exp((new_score - score)/T)) {
+            memcpy(grid, grid_copy, total_cells);
+            score = new_score;
+
+            if (new_score > best_score && heat <= 0) {
+                memcpy(best_grid, grid, total_cells);
+                best_score = new_score;
+            }
+        }
+        T = alpha*T;
+    }
+
+    memcpy(grid, best_grid, total_cells);
+}
+
+static const char BLK_CODES[BLK_COUNT][3] = {
+    "XX", // BLK_CASING
+    "..", // BLK_AIR
+    "[]", // BLK_CELL
+    "##", // BLK_GRAPHITE
+    "Sp", // BLK_SPEED
+    "St", // BLK_COOLER_STD
+    "Wt", // BLK_COOLER_WATER
+    "Cr", // BLK_COOLER_CRYOTHEUM
+    "Rs", // BLK_COOLER_REDSTONE
+    "Ed", // BLK_COOLER_ENDER
+    "Gl", // BLK_COOLER_GLOWSTONE
+    "Cl", // BLK_COOLER_COOLANT
+    "He"  // BLK_COOLER_HELIUM
+};
+
+
+void print_grid(const uint8_t* grid, ReactorState* state) {
+    char buf[32768];
+    char* p = buf;
+    for (int y = 1; y < state->height - 1; ++y) {
+        p += snprintf(p, buf + 32768 - p, "Layer %d:\n", y);
+        for (int x = 1; x < state->width - 1; ++x) {
+            for (int z = 1; z < state->depth - 1; z++) {
+                const char* code = BLK_CODES[grid[idx3d(x, y, z, state->width, state->height)]];
+                *p++ = code[0];
+                *p++ = code[1];
+                *p++ = ' ';
+            }
+            *p++ = '\n';
+        }
+        *p++ = '\n';
+    }
+    *p = '\0';
+    puts(buf);
+}
+
+int main() {
+    ReactorState state = {0};
+    state.fuel_rf = 200;
+    state.fuel_heat = 80;
+
+    init_grid(grid, 15, 15, 15, &state);
+
+    optimize(grid, &state, 1000., 0.1, 100000);
+
+    int rf = 0, heat = 0;
+    eval_full(grid, &state, &rf, &heat);
+    print_grid(grid, &state);
+    printf("rf/t: %d, heat: %d H/t, cells: %d, efficiency: %d%%", rf, heat, state.cell_total, rf / state.cell_total);
+    return 0;
+}
+//TODO(idmp152): get rid of magic numbers hopefully
+//TODO(idmp152): rewrite eval_cell to probably using lookup tables (at least for coolers) 
+//TODO(idmp152): look for better solutions wherever possible, this is a draft
