@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 #include "math.h"
  
 #define MAX_GRID_SIZE (26 * 26 * 26)
@@ -196,17 +197,31 @@ void init_grid(uint8_t* grid, int inner_w, int inner_h, int inner_d, ReactorStat
     }
 }
 
-static inline double score_efficiency(int total_rf, int total_heat, ReactorState* state) {
+enum ScoreMode {
+    MODE_POWER = 0,
+    MODE_EFFICIENCY,
+    MODE_BREEDING
+};
+
+static inline double score_fun(int total_rf, int total_heat, const ReactorState* state, int mode) {
     if (total_heat > 0) {
         return -1000 - total_heat*10;
     }
-
     if (state->cell_total == 0) {
         return 0;
     }
 
-    return (double)total_rf / (double)state->cell_total + 0.01*total_rf;
+    switch (mode) {
+        case MODE_POWER:
+            return (double)total_rf;
+        case MODE_BREEDING:
+            return (double)state->cell_total * (1. + (double)state->speed_block_total);
+        case MODE_EFFICIENCY:
+        default:
+            return (double)total_rf / (double)state->cell_total + 0.01*total_rf;
+    }
 }
+
 
 static uint32_t rng_state = 123456789u;
 static inline uint32_t xorshift_rand() {
@@ -217,7 +232,7 @@ static inline uint32_t xorshift_rand() {
     return rng_state = x;
 }
 
-static inline double rand_double(void) {
+static inline double rand_double() {
     return (double)xorshift_rand() / (double)UINT32_MAX;
 }
 
@@ -236,7 +251,7 @@ static const uint8_t ALLOWED_BLOCKS[] = {
 }; // TODO(idmp152): Can possibly be changed by user
 #define ALLOWED_COUNT (sizeof(ALLOWED_BLOCKS) / sizeof(ALLOWED_BLOCKS[0]))
 
-void optimize(uint8_t* grid, ReactorState* state, double T_start, double T_end, int iterations) {
+void optimize(uint8_t* grid, ReactorState* state, double T_start, double T_end, int iterations, int mode) {
     double T = T_start;
     double alpha = pow(T_end / T_start, 1./iterations);
 
@@ -257,7 +272,7 @@ void optimize(uint8_t* grid, ReactorState* state, double T_start, double T_end, 
         } while (rand_double() < 0.5 * (T / T_start) && replacements < 5); // TODO(idmp152): magic, 0.5 coeff can be varied for efficiency, as well as max replacements
         int rf = 0, heat = 0;
         eval_full(grid_copy, state, &rf, &heat); // TODO(idmp152): bad, should be evaluating replacements, not full grid
-        double new_score = score_efficiency(rf, heat, state);
+        double new_score = score_fun(rf, heat, state, mode);
         if (new_score > score || rand_double() < exp((new_score - score)/T)) {
             memcpy(grid, grid_copy, total_cells);
             score = new_score;
@@ -291,7 +306,7 @@ static const char BLK_CODES[BLK_COUNT][3] = {
 
 
 void print_grid(const uint8_t* grid, ReactorState* state) {
-    char buf[32768];
+    char buf[65536];
     char* p = buf;
     for (int y = 1; y < state->height - 1; ++y) {
         p += snprintf(p, buf + 32768 - p, "Layer %d:\n", y);
@@ -310,14 +325,63 @@ void print_grid(const uint8_t* grid, ReactorState* state) {
     puts(buf);
 }
 
+int prompt_int(const char* label, int default_val, int min_val, int max_val) {
+    char line[64];
+    for(;;) {
+        printf("%s [%d]: ", label, default_val);
+
+        if (!fgets(line, sizeof(line), stdin)) {
+            return default_val;
+        }
+
+        if (line[0] == '\n') {
+            return default_val;
+        }
+
+        char* endptr = NULL;
+        long val = strtol(line, &endptr, 10);
+        if (endptr != line && val >= min_val && val <= max_val) {
+            return (int)val;
+        }
+        printf("Please enter a number between %d and %d.\n", min_val, max_val);
+    }
+}
+
+int prompt_mode(void) {
+    char line[64];
+    for(;;) {
+        printf("Mode (p = power, e = efficiency, b = breeding) [p]: ");
+
+        if (!fgets(line, sizeof(line), stdin) || line[0] == '\n') {
+            return MODE_POWER;
+        }
+        if (line[0] == 'p' || line[0] == 'P') return MODE_POWER;
+        if (line[0] == 'e' || line[0] == 'E') return MODE_EFFICIENCY;
+        if (line[0] == 'b' || line[0] == 'B') return MODE_BREEDING;
+
+        printf("Unknown mode. Type p, e, or b.\n");
+    }
+}
+
+
 int main() {
+    int w = 0, h = 0, d = 0, fuel_rf = 0, fuel_heat = 0, iterations = 0, mode = MODE_POWER;
+    printf("--- NuclearCraft Fission Reactor Optimizer (pre 2.0) \n\n");
+    w = prompt_int("Inner width (X)", 3, 1, 24);
+    h = prompt_int("Inner height (Y)", 3, 1, 24);
+    d = prompt_int("Inner depth (Z)", 3, 1, 24);
+    fuel_rf = prompt_int("Fuel Base Power (RF/t)", 100, 1, INT32_MAX);
+    fuel_heat = prompt_int("Fuel Base Heat (H/t)", 20, 0, INT32_MAX);
+    mode = prompt_mode();
+    iterations = prompt_int("Iterations", w * h * d * 3000, 1000, INT32_MAX);
+
     ReactorState state = {0};
-    state.fuel_rf = 200;
-    state.fuel_heat = 80;
+    state.fuel_rf = fuel_rf;
+    state.fuel_heat = fuel_heat;
 
-    init_grid(grid, 15, 15, 15, &state);
+    init_grid(grid, w, h, d, &state);
 
-    optimize(grid, &state, 1000., 0.1, 100000);
+    optimize(grid, &state, 1000., 0.1, iterations, mode);
 
     int rf = 0, heat = 0;
     eval_full(grid, &state, &rf, &heat);
