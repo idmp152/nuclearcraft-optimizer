@@ -58,7 +58,7 @@ static inline uint8_t is_adjacent(const uint8_t* grid, int width, int height, in
            (grid[idx3d(x, y, z - 1, width, height)] == block_type);
 }
 
-static inline uint8_t is_cell_adjacent_through_graphite(const uint8_t* grid, int width, int height, int x, int y, int z) {
+static inline uint8_t is_cell_adjacent_through_graphite(const uint8_t* grid, int width, int height, int x, int y, int z) { // TODO(idmp152): needs refactor
     static const int dx[6] = {1, -1, 0, 0, 0, 0};
     static const int dy[6] = {0, 0, 1, -1, 0, 0};
     static const int dz[6] = {0, 0, 0, 0, 1, -1}; 
@@ -373,7 +373,7 @@ int main() {
     fuel_rf = prompt_int("Fuel Base Power (RF/t)", 100, 1, INT32_MAX);
     fuel_heat = prompt_int("Fuel Base Heat (H/t)", 20, 0, INT32_MAX);
     mode = prompt_mode();
-    iterations = prompt_int("Iterations", w * h * d * 3000, 1000, INT32_MAX);
+    iterations = prompt_int("Iterations", 50000, 1000, INT32_MAX);
 
     ReactorState state = {0};
     state.fuel_rf = fuel_rf;
