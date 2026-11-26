@@ -29,6 +29,7 @@ typedef struct {
     int width;
     int height;
     int depth;
+    int strides[6];
     int cooler_heat;
     int cell_rf;
     int cell_heat;
@@ -49,110 +50,98 @@ static inline int idx3d(int x, int y, int z, int width, int height) {
     return x + y*width + z*width*height;
 }
 
-static inline uint8_t is_adjacent(const uint8_t* grid, int width, int height, int x, int y, int z, uint8_t block_type) {
-    return (grid[idx3d(x + 1, y, z, width, height)] == block_type) +
-           (grid[idx3d(x, y + 1, z, width, height)] == block_type) +
-           (grid[idx3d(x, y, z + 1, width, height)] == block_type) +
-           (grid[idx3d(x - 1, y, z, width, height)] == block_type) +
-           (grid[idx3d(x, y - 1, z, width, height)] == block_type) +
-           (grid[idx3d(x, y, z - 1, width, height)] == block_type);
+static inline uint8_t is_adjacent(const uint8_t* grid, int base_idx, int* strides, uint8_t block_type) {
+    int num_adjacent = 0;
+    for (int i = 0; i < 6; ++i) {
+        num_adjacent += (grid[base_idx + strides[i]] == block_type);
+    }
+    return num_adjacent;
 }
 
-static inline uint8_t is_cell_adjacent_through_graphite(const uint8_t* grid, int width, int height, int x, int y, int z) { // TODO(idmp152): needs refactor
-    static const int dx[6] = {1, -1, 0, 0, 0, 0};
-    static const int dy[6] = {0, 0, 1, -1, 0, 0};
-    static const int dz[6] = {0, 0, 0, 0, 1, -1}; 
-
+static inline uint8_t is_cell_adjacent_through_graphite(const uint8_t* grid, int base_idx, int* strides) {
     int n = 0;
     for (int i = 0; i < 6; ++i) {
-        int cx = x;
-        int cy = y;
-        int cz = z;
+        int idx = base_idx;
         do {
-            cx += dx[i];
-            cy += dy[i];
-            cz += dz[i];
-        } while (grid[idx3d(cx, cy, cz, width, height)] == BLK_GRAPHITE);
+            idx += strides[i];
+        } while (grid[idx] == BLK_GRAPHITE);
 
-        if (grid[idx3d(cx, cy, cz, width, height)] == BLK_CELL) {
-            ++n;
-        }
+        n += (grid[idx] == BLK_CELL);
     }
     
     return n;
 }
 
-void eval_cell(const uint8_t* grid, int x, int y, int z, ReactorState* state) {
-    uint8_t cell_type = grid[idx3d(x, y, z, state->width, state->height)];
-    
+void eval_cell(const uint8_t* grid, int base_idx, ReactorState* state, int sign) {
+    uint8_t cell_type = grid[base_idx];
     switch (cell_type)
     {
         case BLK_CASING:
         case BLK_AIR:
             break;
         case BLK_COOLER_STD:
-            state->cooler_heat -= 30;
-            if (is_adjacent(grid, state->width, state->height, x, y, z, BLK_COOLER_STD)) {
-                state->cooler_heat -= 30;
+            state->cooler_heat -= sign * 30;
+            if (is_adjacent(grid, base_idx, state->strides, BLK_COOLER_STD)) {
+                state->cooler_heat -= sign * 30;
             }
             break;
         case BLK_COOLER_WATER:
-            state->cooler_heat -= 30;
-            if (is_adjacent(grid, state->width, state->height, x, y, z, BLK_CASING)) {
-                state->cooler_heat -= 30;
+            state->cooler_heat -= sign * 30;
+            if (is_adjacent(grid, base_idx, state->strides, BLK_CASING)) {
+                state->cooler_heat -= sign * 30;
             }
             break;
         case BLK_COOLER_CRYOTHEUM:
-            state->cooler_heat -= 80;
-            if (!is_adjacent(grid, state->width, state->height, x, y, z, BLK_COOLER_CRYOTHEUM)) {
-                state->cooler_heat -= 80;
+            state->cooler_heat -= sign * 80;
+            if (!is_adjacent(grid, base_idx, state->strides, BLK_COOLER_CRYOTHEUM)) {
+                state->cooler_heat -= sign * 80;
             }
             break;
         case BLK_COOLER_REDSTONE:
-            state->cooler_heat -= 80;
-            if (is_adjacent(grid, state->width, state->height, x, y, z, BLK_CELL)) {
-                state->cooler_heat -= 80;
+            state->cooler_heat -= sign * 80;
+            if (is_adjacent(grid, base_idx, state->strides, BLK_CELL)) {
+                state->cooler_heat -= sign * 80;
             }
             break;
         case BLK_COOLER_ENDER:
-            state->cooler_heat -= 80;
-            if (is_adjacent(grid, state->width, state->height, x, y, z, BLK_GRAPHITE)) {
-                state->cooler_heat -= 80;
+            state->cooler_heat -= sign * 80;
+            if (is_adjacent(grid, base_idx, state->strides, BLK_GRAPHITE)) {
+                state->cooler_heat -= sign * 80;
             }
             break;
         case BLK_COOLER_GLOWSTONE:
-            state->cooler_heat -= 80;
-            if (is_adjacent(grid, state->width, state->height, x, y, z, BLK_GRAPHITE) == 6) {
-                state->cooler_heat -= 3*80;
+            state->cooler_heat -= sign * 80;
+            if (is_adjacent(grid, base_idx, state->strides, BLK_GRAPHITE) == 6) {
+                state->cooler_heat -= sign * 3*80;
             }
             break;
         case BLK_COOLER_COOLANT:
-            state->cooler_heat -= 80;
-            if (is_adjacent(grid, state->width, state->height, x, y, z, BLK_COOLER_WATER)) {
-                state->cooler_heat -= 80;
+            state->cooler_heat -= sign * 80;
+            if (is_adjacent(grid, base_idx, state->strides, BLK_COOLER_WATER)) {
+                state->cooler_heat -= sign * 80;
             }
             break;
         case BLK_COOLER_HELIUM:
-            state->cooler_heat -= 125;
+            state->cooler_heat -= sign * 125;
             break;
         case BLK_CELL: {
-            int n = is_cell_adjacent_through_graphite(grid, state->width, state->height, x, y, z);
-            state->cell_heat += (n+1)*(n+2)/2 * state->fuel_heat;
-            state->cell_rf += (n+1) * state->fuel_rf;
-            ++state->cell_total;
+            int n = is_cell_adjacent_through_graphite(grid, base_idx, state->strides);
+            state->cell_heat += sign * ((n+1)*(n+2)/2 * state->fuel_heat);
+            state->cell_rf += sign * ((n+1) * state->fuel_rf);
+            state->cell_total += sign;
             break;
         }
         case BLK_GRAPHITE:
-            ++state->graphite_total;
-            if (is_adjacent(grid, state->width, state->height, x, y, z, BLK_CELL)) {
-                ++state->active_graphite_total;
+            state->graphite_total += sign;
+            if (is_adjacent(grid, base_idx, state->strides, BLK_CELL)) {
+                state->active_graphite_total += sign;
             }
             break;
         case BLK_SPEED:
-            ++state->speed_block_total;
+            state->speed_block_total += sign;
             break;
         default:
-            printf("Unknown cell type in array! x: %d, y: %d, z: %d, type: %d", x, y, z, cell_type);
+            printf("Unknown cell type in array! base index: %d type: %d", base_idx, cell_type);
             break;
     }
 }
@@ -167,23 +156,34 @@ void reset_accumulators(ReactorState* state) {
     state->speed_block_total = 0;
 }
 
+static inline void calc_totals(const ReactorState* state, int* total_rf, int* total_heat) {
+    *total_rf = state->cell_rf + state->active_graphite_total * state->cell_total * state->fuel_rf / 10;
+    *total_heat = state->cell_heat + state->cooler_heat + state->graphite_total * state->cell_total * state->fuel_rf / 5;
+}
+
 void eval_full(const uint8_t* grid, ReactorState* state, int* total_rf, int* total_heat) {
     reset_accumulators(state);
     for (int i = 1; i < state->width - 1; ++i) {
         for (int j = 1; j < state->height - 1; ++j) {
             for (int k = 1; k < state->depth - 1; ++k) {
-                eval_cell(grid, i, j, k, state);
+                eval_cell(grid, idx3d(i, j, k, state->width, state->height), state, +1);
             }
         }
     }
-    *total_rf = state->cell_rf + state->active_graphite_total*state->cell_total*state->fuel_rf/10;
-    *total_heat = state->cell_heat + state->cooler_heat + state->graphite_total*state->cell_total*state->fuel_rf/5;
+    calc_totals(state, total_rf, total_heat);
 }
 
 void init_grid(uint8_t* grid, int inner_w, int inner_h, int inner_d, ReactorState* state) {
     state->width  = inner_w + 2;
     state->height = inner_h + 2;
     state->depth  = inner_d + 2;
+    state->strides[0] = 1;
+    state->strides[1] = -1;
+    state->strides[2] = state->width;
+    state->strides[3] = -state->width;
+    state->strides[4] = state->width * state->height;
+    state->strides[5] = -(state->width * state->height);
+
 
     int total_cells = state->width * state->height * state->depth;
     memset(grid, BLK_CASING, total_cells);
@@ -194,6 +194,39 @@ void init_grid(uint8_t* grid, int inner_w, int inner_h, int inner_d, ReactorStat
                 grid[idx3d(x, y, z, state->width, state->height)] = BLK_AIR;
             }
         }
+    }
+}
+
+int count_affected(uint8_t* grid, int base_idx, int* strides, int* out_idx) {
+    int count = 0;
+
+    out_idx[count++] = base_idx;
+    for (int i = 0; i < 6; ++i) {
+        int idx = base_idx + strides[i];
+        uint8_t block_type = grid[idx];
+        if (block_type == BLK_CASING) continue;
+        out_idx[count++] = idx;
+        if (block_type != BLK_GRAPHITE) continue;
+        do {
+            idx += strides[i];  
+            block_type = grid[idx];  
+        } while (block_type == BLK_GRAPHITE);
+        if (block_type == BLK_CELL) {
+            out_idx[count++] = idx;
+        }
+    }
+    return count;
+}
+
+void replace_block(uint8_t* grid, ReactorState* state, int base_idx, uint8_t new_block_type) {
+    int affected[13];
+    int n = count_affected(grid, base_idx, state->strides, affected);
+    for (int i = 0; i < n; ++ i) {
+        eval_cell(grid, affected[i], state, -1);
+    }
+    grid[base_idx] = new_block_type;
+    for (int i = 0; i < n; ++ i) {
+        eval_cell(grid, affected[i], state, +1);
     }
 }
 
@@ -257,30 +290,43 @@ void optimize(uint8_t* grid, ReactorState* state, double T_start, double T_end, 
 
     double score = 0.;
     int total_cells = state->width * state->height * state->depth;
-    uint8_t grid_copy[MAX_GRID_SIZE];
     uint8_t best_grid[MAX_GRID_SIZE];
     memcpy(best_grid, grid, total_cells);
+
     double best_score = -99999999999999;
     for(int i = 0; i < iterations; ++i) {
-        memcpy(grid_copy, grid, total_cells); // TODO(idmp152): awful, copying
         int replacements  = 0;
+        int replacement_idx[5];
+        int replacement_old_blocks[5];
+        ReactorState old_state = *state;
         do {
-            ++replacements;
-            grid_copy[idx3d(1 + xorshift_rand() % (state->width - 2),
+            int r_idx = idx3d(1 + xorshift_rand() % (state->width - 2),
                 1 + xorshift_rand() % (state->height - 2),
-                1 + xorshift_rand() % (state->depth - 2), state->width, state->height)] = ALLOWED_BLOCKS[xorshift_rand() % ALLOWED_COUNT];
+                1 + xorshift_rand() % (state->depth - 2), state->width, state->height);
+            uint8_t r_block = ALLOWED_BLOCKS[xorshift_rand() % ALLOWED_COUNT];
+
+            if (r_block == grid[r_idx]) continue;
+            replacement_idx[replacements] = r_idx;
+            replacement_old_blocks[replacements] = grid[r_idx];
+            replace_block(grid, state, r_idx, r_block);
+            ++replacements;
         } while (rand_double() < 0.5 * (T / T_start) && replacements < 5); // TODO(idmp152): magic, 0.5 coeff can be varied for efficiency, as well as max replacements
+
         int rf = 0, heat = 0;
-        eval_full(grid_copy, state, &rf, &heat); // TODO(idmp152): bad, should be evaluating replacements, not full grid
+        calc_totals(state, &rf, &heat);
         double new_score = score_fun(rf, heat, state, mode);
         if (new_score > score || rand_double() < exp((new_score - score)/T)) {
-            memcpy(grid, grid_copy, total_cells);
             score = new_score;
 
             if (new_score > best_score && heat <= 0) {
                 memcpy(best_grid, grid, total_cells);
                 best_score = new_score;
             }
+        } else {
+            for (int j = replacements - 1; j >= 0; --j) {
+                grid[replacement_idx[j]] = replacement_old_blocks[j];
+            }
+            *state = old_state;
         }
         T = alpha*T;
     }
@@ -373,7 +419,7 @@ int main() {
     fuel_rf = prompt_int("Fuel Base Power (RF/t)", 100, 1, INT32_MAX);
     fuel_heat = prompt_int("Fuel Base Heat (H/t)", 20, 0, INT32_MAX);
     mode = prompt_mode();
-    iterations = prompt_int("Iterations", 50000, 1000, INT32_MAX);
+    iterations = prompt_int("Iterations", 1000000, 1000, INT32_MAX);
 
     ReactorState state = {0};
     state.fuel_rf = fuel_rf;
