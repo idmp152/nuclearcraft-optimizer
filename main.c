@@ -72,57 +72,32 @@ static inline uint8_t is_cell_adjacent_through_graphite(const uint8_t* grid, int
     return n;
 }
 
+typedef struct {
+    int base_cool;
+    int bonus_cool;
+    uint8_t adj_block;
+    uint8_t min_count;
+    uint8_t invert;
+} CoolerRule;
+
+static const CoolerRule COOLER_RULES[BLK_COUNT] = {
+    [BLK_COOLER_STD]       = { -30,  -30, BLK_COOLER_STD,       1, 0 },
+    [BLK_COOLER_WATER]     = { -30,  -30, BLK_CASING,           1, 0 },
+    [BLK_COOLER_CRYOTHEUM] = { -80,  -80, BLK_COOLER_CRYOTHEUM, 1, 1 },
+    [BLK_COOLER_REDSTONE]  = { -80,  -80, BLK_CELL,             1, 0 },
+    [BLK_COOLER_ENDER]     = { -80,  -80, BLK_GRAPHITE,         1, 0 },
+    [BLK_COOLER_GLOWSTONE] = { -80, -240, BLK_GRAPHITE,         6, 0 },
+    [BLK_COOLER_COOLANT]   = { -80,  -80, BLK_COOLER_WATER,     1, 0 },
+    [BLK_COOLER_HELIUM]    = { -125,   0, BLK_CASING,           0, 0 },
+};
+
 void eval_cell(const uint8_t* grid, int base_idx, ReactorState* state, int sign) {
-    uint8_t cell_type = grid[base_idx];
-    switch (cell_type)
+    uint8_t block_type = grid[base_idx];
+
+    switch (block_type)
     {
         case BLK_CASING:
         case BLK_AIR:
-            break;
-        case BLK_COOLER_STD:
-            state->cooler_heat -= sign * 30;
-            if (is_adjacent(grid, base_idx, state->strides, BLK_COOLER_STD)) {
-                state->cooler_heat -= sign * 30;
-            }
-            break;
-        case BLK_COOLER_WATER:
-            state->cooler_heat -= sign * 30;
-            if (is_adjacent(grid, base_idx, state->strides, BLK_CASING)) {
-                state->cooler_heat -= sign * 30;
-            }
-            break;
-        case BLK_COOLER_CRYOTHEUM:
-            state->cooler_heat -= sign * 80;
-            if (!is_adjacent(grid, base_idx, state->strides, BLK_COOLER_CRYOTHEUM)) {
-                state->cooler_heat -= sign * 80;
-            }
-            break;
-        case BLK_COOLER_REDSTONE:
-            state->cooler_heat -= sign * 80;
-            if (is_adjacent(grid, base_idx, state->strides, BLK_CELL)) {
-                state->cooler_heat -= sign * 80;
-            }
-            break;
-        case BLK_COOLER_ENDER:
-            state->cooler_heat -= sign * 80;
-            if (is_adjacent(grid, base_idx, state->strides, BLK_GRAPHITE)) {
-                state->cooler_heat -= sign * 80;
-            }
-            break;
-        case BLK_COOLER_GLOWSTONE:
-            state->cooler_heat -= sign * 80;
-            if (is_adjacent(grid, base_idx, state->strides, BLK_GRAPHITE) == 6) {
-                state->cooler_heat -= sign * 3*80;
-            }
-            break;
-        case BLK_COOLER_COOLANT:
-            state->cooler_heat -= sign * 80;
-            if (is_adjacent(grid, base_idx, state->strides, BLK_COOLER_WATER)) {
-                state->cooler_heat -= sign * 80;
-            }
-            break;
-        case BLK_COOLER_HELIUM:
-            state->cooler_heat -= sign * 125;
             break;
         case BLK_CELL: {
             int n = is_cell_adjacent_through_graphite(grid, base_idx, state->strides);
@@ -140,9 +115,19 @@ void eval_cell(const uint8_t* grid, int base_idx, ReactorState* state, int sign)
         case BLK_SPEED:
             state->speed_block_total += sign;
             break;
-        default:
-            printf("Unknown cell type in array! base index: %d type: %d", base_idx, cell_type);
+        default: {
+            if (block_type >= BLK_COUNT) {
+                printf("Unknown cell type in array! base index: %d type: %d", base_idx, block_type);
+                break;
+            }
+            uint8_t adj_block_count[BLK_COUNT] = {0}; 
+            for (int i = 0; i < 6; ++i) {
+                ++adj_block_count[grid[base_idx + state->strides[i]]];
+            }
+            const CoolerRule* cooler_rule = &COOLER_RULES[block_type];
+            state->cooler_heat += sign * (cooler_rule->base_cool + ((adj_block_count[cooler_rule->adj_block] >= cooler_rule->min_count) ^ cooler_rule->invert)*cooler_rule->bonus_cool);
             break;
+        }
     }
 }
 
