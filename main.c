@@ -222,21 +222,18 @@ enum ScoreMode {
 };
 
 static inline double score_fun(int total_rf, int total_heat, const ReactorState* state, int mode) {
-    if (total_heat > 0) {
-        return -1000 - total_heat*10;
-    }
-    if (state->cell_total == 0) {
-        return 0;
-    }
+    double heat_penalty = -1 * (double)total_heat;
+    if (total_heat > 0) return 10*heat_penalty;
+    if (state->cell_total == 0) return 0.1*heat_penalty;
 
     switch (mode) {
         case MODE_POWER:
-            return (double)total_rf;
+            return (double)total_rf + heat_penalty;
         case MODE_BREEDING:
-            return (double)state->cell_total * (1. + (double)state->speed_block_total);
+            return (double)state->cell_total * (1.0 + (double)state->speed_block_total) + heat_penalty;
         case MODE_EFFICIENCY:
         default:
-            return (double)total_rf / (double)state->cell_total + 0.01*total_rf;
+            return ((double)total_rf / (double)state->cell_total) + 0.0001 * (double)total_rf + heat_penalty;
     }
 }
 
@@ -394,6 +391,38 @@ int prompt_mode(void) {
     }
 }
 
+#define ITERATIONS_PER_BLOCK 2000
+#define ITERATIONS_LOWER_BOUND 100000
+
+static inline int calc_default_iterations(int w, int h, int d) {
+    int volume = w * h * d;
+    int iters = volume * ITERATIONS_PER_BLOCK;
+    if (iters < ITERATIONS_LOWER_BOUND) {
+        iters = ITERATIONS_LOWER_BOUND;
+    }
+    return iters;
+}
+
+static inline double calc_start_temp(int fuel_rf, int fuel_heat, int mode) {
+    double T_start;
+    switch (mode) {
+        case MODE_BREEDING:
+            T_start = 0.79 * (1.0 + 0.05 * (double)fuel_heat);
+            break;
+        case MODE_POWER:
+        case MODE_EFFICIENCY:
+        default:
+            T_start = 0.79 * ((double)fuel_rf + 0.05 * (double)fuel_heat);
+            break;
+    }
+
+    return (T_start > 2.0) ? T_start : 2.0;
+}
+
+
+
+
+
 
 int main() {
     int w = 0, h = 0, d = 0, fuel_rf = 0, fuel_heat = 0, iterations = 0, mode = MODE_POWER;
@@ -402,9 +431,11 @@ int main() {
     h = prompt_int("Inner height (Y)", 3, 1, 24);
     d = prompt_int("Inner depth (Z)", 3, 1, 24);
     fuel_rf = prompt_int("Fuel Base Power (RF/t)", 100, 1, INT32_MAX);
-    fuel_heat = prompt_int("Fuel Base Heat (H/t)", 20, 0, INT32_MAX);
+    fuel_heat = prompt_int("Fuel Base Heat (H/t)", 20, 1, INT32_MAX);
     mode = prompt_mode();
-    iterations = prompt_int("Iterations", 1000000, 1000, INT32_MAX);
+
+    int default_iters = calc_default_iterations(w, h, d);
+    iterations = prompt_int("Iterations", default_iters, 1000, INT32_MAX);
 
     ReactorState state = {0};
     state.fuel_rf = fuel_rf;
@@ -412,7 +443,9 @@ int main() {
 
     init_grid(grid, w, h, d, &state);
 
-    optimize(grid, &state, 1000., 0.1, iterations, mode);
+    double T_start = calc_start_temp(fuel_rf, fuel_heat, mode);
+    double T_end = (mode == MODE_BREEDING) ? 0.001 : 0.1;
+    optimize(grid, &state, T_start, T_end, iterations, mode);
 
     int rf = 0, heat = 0;
     eval_full(grid, &state, &rf, &heat);
