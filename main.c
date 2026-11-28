@@ -415,16 +415,26 @@ static inline int calc_default_iterations(int w, int h, int d) {
     return iters;
 }
 
-static inline double calc_start_temp(int fuel_rf, int fuel_heat, int mode) {
+static inline double calc_start_temp(int w, int h, int d, int fuel_rf, int fuel_heat, int mode) {
+    // TODO(idmp152): make universal!! block type count, probability and number of trials are hardcoded
+    // Estimates come from e^(-|delta|/T) = 80% = 0.8; T = |delta|/(-ln(0.8))
+    // where |delta| ~ P_cell * E[replacements] * A
+    // where A is an estimate of the average jump after 1 replacement in the score from the current condition at high temperatures
+    // E[replacements] (Bernoulli trials up to 5, see optimize()) = 1 + 0.5 + 0.5^2 + 0.5^3 + 0.5^4 = 1.9375
+    // breeding: P_cell = 2/12 (speed block and fuel cell); A = 0.5 + (V/12), see score_fun
+    // power: P_cell = 1/11; A = 1.5*fuel_rf (one cell has ~0.5 neighbours at the start) + 0.5*fuel_heat (some cool_bonus prediction) - 30
+    // efficiency: main term is 100*fuel_rf/(N_cells), others are negligible
     double T_start;
     switch (mode) {
         case MODE_BREEDING:
-            T_start = 0.79 * (1.0 + 0.1 * (double)fuel_heat);
+            T_start = 1.447 * (0.5 + w*h*d/12.);
             break;
         case MODE_POWER:
+            T_start = 0.79 * (1.5*(double)fuel_rf + 0.5*fuel_heat - 30);
+            break;
         case MODE_EFFICIENCY:
         default:
-            T_start = 0.79 * ((double)fuel_rf + 0.1 * (double)fuel_heat);
+            T_start = 0.79 * (100*(double)fuel_rf/(w*h*d/11.));
             break;
     }
 
@@ -450,8 +460,8 @@ int main() {
 
     init_grid(grid, w, h, d, &state);
 
-    double T_start = calc_start_temp(fuel_rf, fuel_heat, mode);
-    double T_end = (mode == MODE_BREEDING) ? 0.001 : 0.1;
+    double T_start = calc_start_temp(w,h,d,fuel_rf, fuel_heat, mode);
+    double T_end = (mode == MODE_BREEDING) ? 0.1 : 0.01;
     optimize(grid, &state, T_start, T_end, iterations, mode);
 
     int rf = 0, heat = 0;
