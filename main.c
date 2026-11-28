@@ -224,6 +224,7 @@ enum ScoreMode {
 static inline double score_fun(int total_rf, int total_heat, const ReactorState* state, int mode) {
     if (total_heat > 0) return -10 * (double)total_heat;
 
+    //TODO(idmp152): think how to adapt for high-heat fuels (800 by 640 HEU)
     // we calculate how much cooling is utilized to cool the cells
     // then multiply the current cooling budget (total heat is negative)
     // by the utilization (lots of cooling with no cells gives a small bonus, as well as having
