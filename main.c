@@ -222,21 +222,32 @@ enum ScoreMode {
 };
 
 static inline double score_fun(int total_rf, int total_heat, const ReactorState* state, int mode) {
-    double heat_penalty = -1 * (double)total_heat;
-    if (total_heat > 0) return 10*heat_penalty;
-    if (state->cell_total == 0) return 0.1*heat_penalty;
+    if (total_heat > 0) return -10 * (double)total_heat;
+
+    // we calculate how much cooling is utilized to cool the cells
+    // then multiply the current cooling budget (total heat is negative)
+    // by the utilization (lots of cooling with no cells gives a small bonus, as well as having
+    // many cells without a cooling budget for placing more); parabola forms a peak
+    int heat_gen = total_heat - state->cooler_heat;
+    double cool_util = (state->cooler_heat < 0)
+        ? ((double)heat_gen / -(double)state->cooler_heat)
+        : 0.0;
+
+    double cool_bonus = -(double)total_heat * cool_util;
 
     switch (mode) {
         case MODE_POWER:
-            return (double)total_rf + heat_penalty;
+            return (double)total_rf + cool_bonus - 30*(double)state->cell_total;
         case MODE_BREEDING:
-            return (double)state->cell_total * (1.0 + (double)state->speed_block_total) + heat_penalty;
+            return (double)state->cell_total * (1.0 + (double)state->speed_block_total);
         case MODE_EFFICIENCY:
         default:
-            return ((double)total_rf / (double)state->cell_total) + 0.0001 * (double)total_rf + heat_penalty;
+            if (state->cell_total == 0) return 0.0;
+            return 100.0 * ((double)total_rf / (double)state->cell_total)
+                 + 0.05 * (double)total_rf
+                 + 0.1 * cool_bonus;
     }
 }
-
 
 static uint32_t rng_state = 123456789u;
 static inline uint32_t xorshift_rand() {
@@ -262,7 +273,8 @@ static const uint8_t ALLOWED_BLOCKS[] = {
     BLK_COOLER_ENDER,
     BLK_COOLER_GLOWSTONE,
     BLK_COOLER_COOLANT,
-    BLK_COOLER_HELIUM
+    BLK_COOLER_HELIUM,
+    BLK_SPEED
 }; // TODO(idmp152): Can possibly be changed by user
 #define ALLOWED_COUNT (sizeof(ALLOWED_BLOCKS) / sizeof(ALLOWED_BLOCKS[0]))
 
@@ -285,7 +297,7 @@ void optimize(uint8_t* grid, ReactorState* state, double T_start, double T_end, 
             int r_idx = idx3d(1 + xorshift_rand() % (state->width - 2),
                 1 + xorshift_rand() % (state->height - 2),
                 1 + xorshift_rand() % (state->depth - 2), state->width, state->height);
-            uint8_t r_block = ALLOWED_BLOCKS[xorshift_rand() % ALLOWED_COUNT];
+            uint8_t r_block = ALLOWED_BLOCKS[xorshift_rand() % (ALLOWED_COUNT - (mode != MODE_BREEDING))];
 
             if (r_block == grid[r_idx]) continue;
             replacement_idx[replacements] = r_idx;
@@ -337,7 +349,7 @@ void print_grid(const uint8_t* grid, ReactorState* state) {
     char buf[65536];
     char* p = buf;
     for (int y = 1; y < state->height - 1; ++y) {
-        p += snprintf(p, buf + 32768 - p, "Layer %d:\n", y);
+        p += snprintf(p, buf + sizeof(buf) - p, "Layer %d:\n", y);
         for (int x = 1; x < state->width - 1; ++x) {
             for (int z = 1; z < state->depth - 1; z++) {
                 const char* code = BLK_CODES[grid[idx3d(x, y, z, state->width, state->height)]];
@@ -407,22 +419,17 @@ static inline double calc_start_temp(int fuel_rf, int fuel_heat, int mode) {
     double T_start;
     switch (mode) {
         case MODE_BREEDING:
-            T_start = 0.79 * (1.0 + 0.05 * (double)fuel_heat);
+            T_start = 0.79 * (1.0 + 0.1 * (double)fuel_heat);
             break;
         case MODE_POWER:
         case MODE_EFFICIENCY:
         default:
-            T_start = 0.79 * ((double)fuel_rf + 0.05 * (double)fuel_heat);
+            T_start = 0.79 * ((double)fuel_rf + 0.1 * (double)fuel_heat);
             break;
     }
 
     return (T_start > 2.0) ? T_start : 2.0;
 }
-
-
-
-
-
 
 int main() {
     int w = 0, h = 0, d = 0, fuel_rf = 0, fuel_heat = 0, iterations = 0, mode = MODE_POWER;
